@@ -1,5 +1,4 @@
 import streamlit as st
-import datatable as dt
 import pandas as pd
 import chardet  # to detect file encoding
 import numpy as np
@@ -20,23 +19,10 @@ if uploaded_file is not None:
         result = chardet.detect(raw_data)
         file_encoding = result['encoding']
         
-        # Reload the file with correct encoding
+        # Reload the file with correct encoding using pandas
         st.write(f"Detected file encoding: {file_encoding}")
-        df_dt = dt.fread(uploaded_file, encoding=file_encoding, header=True, fill=True)
-
-        # Convert datatable frame to pandas DataFrame
-        df = df_dt.to_pandas()
-
-        # Check if headers are valid
-        if df.columns.str.contains(r'[0-9]').all():  # If all columns are numbered, header is missing
-            st.warning("Column headers not detected properly. Using the first row as headers.")
-            # Reload without headers, treat the first row as headers
-            df_dt = dt.fread(uploaded_file, encoding=file_encoding, header=False, fill=True)
-            df = df_dt.to_pandas()
-
-            # Set the first row as the header
-            df.columns = df.iloc[0]
-            df = df[1:].reset_index(drop=True)
+        uploaded_file.seek(0)  # Reset file pointer after reading it for encoding detection
+        df = pd.read_csv(uploaded_file, encoding=file_encoding)
 
         # Preview the first few rows of the dataset
         st.write("### Data Preview (Before Cleanup):")
