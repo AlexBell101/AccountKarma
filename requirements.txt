@@ -2,4 +2,4 @@ streamlit
 pandas
 tldextract
 xlsxwriter
-datatable
+
