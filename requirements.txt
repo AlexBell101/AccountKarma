@@ -1,5 +1,7 @@
 streamlit
 pandas
-tldextract
-xlsxwriter
-
+datatable
+chardet
+fuzzywuzzy
+python-Levenshtein  # To speed up fuzzy matching
+numpy
