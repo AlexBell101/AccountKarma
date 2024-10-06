@@ -12,14 +12,18 @@ Upload your account data, apply rules to detect duplicates, and identify parent-
 Leverage custom rules based on country, domain, opportunity counts, and more.
 """)
 
-# File upload
-uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+# File uploader and initial DataFrame
+uploaded_file = st.file_uploader("Upload your file", type=['csv'])
 
-# If a file is uploaded
 if uploaded_file is not None:
-    # Read the uploaded CSV
-    df = pd.read_csv(uploaded_file)
-    st.write("### Preview of Uploaded Data")
+    try:
+        # Try reading the CSV file with 'utf-8' encoding first
+        df = pd.read_csv(uploaded_file, encoding='utf-8')
+    except UnicodeDecodeError:
+        # If there's a decoding error, try 'ISO-8859-1'
+        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+
+    st.write("### Data Preview (Before Cleanup):")
     st.dataframe(df.head())
 
     # Sidebar options
