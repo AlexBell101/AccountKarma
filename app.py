@@ -1,94 +1,83 @@
 import pandas as pd
 import streamlit as st
-from io import BytesIO
 
-# Set the page config
-st.set_page_config(page_title="Account Karma", layout="centered")
+# Load CSV with fallback encoding and clean up header names
+def load_csv_with_fallbacks(uploaded_file):
+    try:
+        # Try reading with utf-8 encoding
+        df = pd.read_csv(uploaded_file, encoding='utf-8', error_bad_lines=False)
+    except UnicodeDecodeError:
+        # Fallback to ISO-8859-1 encoding
+        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1', error_bad_lines=False)
+    
+    # Clean up column headers by stripping quotes and spaces
+    df.columns = df.columns.str.strip().str.replace('"', '')
+    
+    return df
 
-# Title for the app
+# Function to process accounts in chunks
+def process_large_file_in_chunks(uploaded_file, chunk_size=5000):
+    processed_chunks = []
+    
+    for chunk in pd.read_csv(uploaded_file, chunksize=chunk_size):
+        processed_chunk = process_accounts(chunk)
+        processed_chunks.append(processed_chunk)
+    
+    # Concatenate all processed chunks back into a single DataFrame
+    return pd.concat(processed_chunks, ignore_index=True)
+
+# Function to process accounts and identify parent/child/duplicates
+def process_accounts(df):
+    df['Account Type'] = 'Parent'
+    df['Proposed Parent Account ID'] = ''
+
+    for idx, row in df.iterrows():
+        domain = row.get('Domain', '')
+        country = row.get('Billing Country', '')
+        
+        # Apply domain rules for parent-child relations
+        if pd.notna(domain):
+            if domain.endswith('.de') and country == 'Germany':
+                com_domain = domain.replace('.de', '.com')
+                if com_domain in df['Domain'].values:
+                    com_account = df[df['Domain'] == com_domain].iloc[0]
+                    df.at[idx, 'Account Type'] = 'Child'
+                    df.at[idx, 'Proposed Parent Account ID'] = com_account['Account ID']
+                    
+            # Logic for determining duplicates based on name similarity and other rules
+            if df.duplicated(subset=['Domain', 'Billing Country']).any():
+                df['Account Type'] = 'Duplicate'
+    
+    return df
+
+# Streamlit app setup
 st.title("🔍 Account Karma")
 st.write("Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships.")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
+# File upload widget
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-# Function to process the accounts
-def process_accounts(df):
-    # Ensure necessary columns exist
-    required_columns = ['Account Name', 'Domain', 'Billing Country', '# of Closed Opportunities', '# of Open Opportunities']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    
-    if missing_columns:
-        st.error(f"Missing columns: {', '.join(missing_columns)}")
-        return df
-    
-    df['Account Type'] = 'Parent'
-    df['Proposed Parent Account ID'] = None
-    df['Duplicate'] = False
-
-    # Rule 1: Parent-child relationships by domain and country
-    for idx, row in df.iterrows():
-        domain = row['Domain']
-        country = row['Billing Country']
-        if pd.notna(domain):
-            # Look for potential parent-child relationships based on country and domain
-            parent_accounts = df[(df['Domain'].str.contains(domain, na=False)) & (df['Billing Country'] == country)]
-            if len(parent_accounts) > 1:
-                parent = parent_accounts.iloc[0]
-                if parent['Account Name'] != row['Account Name']:
-                    df.at[idx, 'Account Type'] = 'Child'
-                    df.at[idx, 'Proposed Parent Account ID'] = parent['Account ID']
-    
-    # Rule 2: Name similarity and no domain
-    for idx, row in df.iterrows():
-        if pd.isna(row['Domain']):
-            similar_accounts = df[(df['Account Name'].str.contains(row['Account Name'], na=False)) & (df['Billing Country'] == row['Billing Country']) & pd.notna(df['Domain'])]
-            if not similar_accounts.empty:
-                df.at[idx, 'Duplicate'] = True
-
-    # Rule 3: Use opportunities as a tiebreaker
-    for idx, row in df.iterrows():
-        if df.at[idx, 'Account Type'] == 'Parent':
-            parent_candidates = df[(df['Account Name'] == row['Account Name']) & (df['Billing Country'] == row['Billing Country'])]
-            if len(parent_candidates) > 1:
-                parent_candidates = parent_candidates.sort_values(by=['# of Open Opportunities', '# of Closed Opportunities'], ascending=False)
-                parent = parent_candidates.iloc[0]
-                if parent['Account ID'] != row['Account ID']:
-                    df.at[idx, 'Account Type'] = 'Child'
-                    df.at[idx, 'Proposed Parent Account ID'] = parent['Account ID']
-
-    return df
-
-# Check if a file was uploaded
 if uploaded_file is not None:
-    try:
-        # Try reading the file with the appropriate encoding and skip bad lines
-        df = pd.read_csv(uploaded_file, encoding='utf-8', on_bad_lines='skip', header=0)
-        
-        # Show a preview of the data
-        st.write("### Data Preview (Before Processing):")
-        st.dataframe(df.head())
-        
-        # Let user select columns if they aren't standard
-        account_name_col = st.selectbox("Select the column for Account Name:", df.columns)
-        domain_col = st.selectbox("Select the column for Domain:", df.columns)
-        country_col = st.selectbox("Select the column for Country:", df.columns)
-        
-        # Perform the account processing
-        processed_df = process_accounts(df)
-        
-        # Show the processed data
-        st.write("### Processed Data:")
-        st.dataframe(processed_df[[account_name_col, domain_col, country_col, 'Account Type', 'Proposed Parent Account ID']].head())
-        
-        # Allow the user to download the processed data
-        csv = processed_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Processed CSV",
-            data=csv,
-            file_name="processed_accounts.csv",
-            mime="text/csv"
-        )
-    
-    except Exception as e:
-        st.error(f"An error occurred while processing the file: {e}")
+    # Load the file with encoding handling
+    df = load_csv_with_fallbacks(uploaded_file)
+
+    # Show preview of the first few rows
+    st.write("### Data Preview")
+    st.dataframe(df.head())
+
+    # Process the data in chunks and apply parent-child analysis
+    st.write("Processing the data, please wait...")
+    processed_df = process_large_file_in_chunks(uploaded_file)
+
+    # Show processed data preview
+    st.write("### Processed Data")
+    st.dataframe(processed_df.head())
+
+    # Download button for processed file
+    csv = processed_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Processed CSV", data=csv, file_name="processed_accounts.csv", mime="text/csv")
+
+# Requirements
+# streamlit
+# pandas
+# xlsxwriter
