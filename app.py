@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import chardet  # to detect file encoding
+import chardet  # To detect file encoding
 import numpy as np
 from fuzzywuzzy import fuzz
 
@@ -18,18 +18,31 @@ if uploaded_file is not None:
         raw_data = uploaded_file.read()
         result = chardet.detect(raw_data)
         file_encoding = result['encoding']
-        
+
         # Reload the file with correct encoding using pandas
         st.write(f"Detected file encoding: {file_encoding}")
         uploaded_file.seek(0)  # Reset file pointer after reading it for encoding detection
-        df = pd.read_csv(uploaded_file, encoding=file_encoding)
+        
+        # Try reading the CSV with headers, if it fails, fallback to no headers
+        try:
+            df = pd.read_csv(uploaded_file, encoding=file_encoding)
+        except Exception as e:
+            st.write("Column headers not detected properly. Using the first row as headers.")
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, encoding=file_encoding, header=None)  # Try without headers
+
+            # Prompt user to select the actual headers
+            st.write("Please manually select the correct header row")
+            header_row = st.number_input("Select the row number containing headers (0-indexed)", min_value=0, max_value=len(df)-1, value=0)
+            df.columns = df.iloc[header_row]
+            df = df.drop(header_row).reset_index(drop=True)
+
+        # Clean up column names
+        df.columns = df.columns.str.strip().str.replace('"', '')
 
         # Preview the first few rows of the dataset
         st.write("### Data Preview (Before Cleanup):")
         st.dataframe(df.head())
-
-        # Clean up column names
-        df.columns = df.columns.str.strip().str.replace('"', '')
 
         # Detect and show column names
         st.write("### Detected Columns:")
