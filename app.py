@@ -10,14 +10,24 @@ st.set_page_config(page_title="Account Karma", layout="centered")
 st.title("🔍 Account Karma")
 st.write("Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships.")
 
-# Function to read CSV file with encoding handling
+# Function to clean up and standardize column headers
+def clean_column_headers(df):
+    # Strip whitespace and clean extra quotes from headers
+    df.columns = df.columns.str.strip().str.replace('"', '')
+    return df
+
+# Function to read CSV file with encoding handling and clean headers
 def read_csv_with_encoding(uploaded_file):
     try:
-        # Read the file while handling quotes properly and specifying comma as the delimiter
-        return pd.read_csv(uploaded_file, encoding='utf-8', delimiter=',', quotechar='"', skipinitialspace=True)
+        # Try reading the file with UTF-8
+        df = pd.read_csv(uploaded_file, encoding='utf-8', delimiter=',', quotechar='"', skipinitialspace=True)
+        df = clean_column_headers(df)
+        return df
     except UnicodeDecodeError:
-        # If UTF-8 fails, try reading it with ISO-8859-1 (Latin-1) encoding
-        return pd.read_csv(uploaded_file, encoding='ISO-8859-1', delimiter=',', quotechar='"', skipinitialspace=True)
+        # Fallback to ISO-8859-1 encoding if UTF-8 fails
+        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1', delimiter=',', quotechar='"', skipinitialspace=True)
+        df = clean_column_headers(df)
+        return df
 
 # File uploader
 uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
