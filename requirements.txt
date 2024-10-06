@@ -1,7 +1,6 @@
 streamlit
 pandas
-datatable
 chardet
 fuzzywuzzy
-python-Levenshtein  # To speed up fuzzy matching
+python-Levenshtein
 numpy
