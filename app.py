@@ -13,11 +13,11 @@ st.write("Upload your account data, apply rules to detect duplicates, and identi
 # Function to read CSV file with encoding handling
 def read_csv_with_encoding(uploaded_file):
     try:
-        # Attempt to read the file with UTF-8 encoding
-        return pd.read_csv(uploaded_file, encoding='utf-8')
+        # Read the file while handling quotes properly and specifying comma as the delimiter
+        return pd.read_csv(uploaded_file, encoding='utf-8', delimiter=',', quotechar='"', skipinitialspace=True)
     except UnicodeDecodeError:
         # If UTF-8 fails, try reading it with ISO-8859-1 (Latin-1) encoding
-        return pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+        return pd.read_csv(uploaded_file, encoding='ISO-8859-1', delimiter=',', quotechar='"', skipinitialspace=True)
 
 # File uploader
 uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
