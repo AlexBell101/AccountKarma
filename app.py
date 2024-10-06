@@ -10,14 +10,23 @@ st.set_page_config(page_title="Account Karma", layout="centered")
 st.title("🔍 Account Karma")
 st.write("Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships. Leverage custom rules based on country, domain, opportunity counts, and more.")
 
+# Function to read CSV file with encoding handling
+def read_csv_with_encoding(uploaded_file):
+    try:
+        # Attempt to read the file with UTF-8 encoding
+        return pd.read_csv(uploaded_file, encoding='utf-8')
+    except UnicodeDecodeError:
+        # If UTF-8 fails, try reading it with ISO-8859-1 (Latin-1) encoding
+        return pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+
 # File uploader
 uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
 
 # Process the file
 if uploaded_file is not None:
     try:
-        # Load the CSV file
-        df = pd.read_csv(uploaded_file)
+        # Load the CSV file with encoding handling
+        df = read_csv_with_encoding(uploaded_file)
 
         # Display data preview
         st.write("### Data Preview (Before Cleanup):")
