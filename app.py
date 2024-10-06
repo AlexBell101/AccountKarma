@@ -2,92 +2,101 @@ import streamlit as st
 import pandas as pd
 import difflib
 
-# Set the page config
+# Set page config for the Streamlit app
 st.set_page_config(page_title="Account Karma", layout="wide")
 
-# Title and description
-st.title("🔍 Account Karma")
-st.write("""
-Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships.
-Leverage custom rules based on country, domain, opportunity counts, and more.
-""")
+# Custom CSS for a cleaner look
+st.markdown(
+    """
+    <style>
+    /* Custom style for light theme */
+    html, body, [class*="css"]  {
+        background-color: #FFFFFF;  /* White background */
+        color: #000000;  /* Black text */
+        font-family: 'Roboto', sans-serif;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-# File uploader and initial DataFrame
-uploaded_file = st.file_uploader("Upload your file", type=['csv'])
+st.title("🔍 Account Karma")
+st.write("Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships. Leverage custom rules based on country, domain, opportunity counts, and more.")
+
+# Function to process the account data and add relationship columns
+def process_accounts(df):
+    # Ensure 'Domain' and 'Country' columns exist
+    if 'Domain' not in df.columns or 'Country' not in df.columns:
+        st.error("Required columns 'Domain' or 'Country' not found in the file.")
+        return df
+    
+    df['Account Type'] = "Parent"  # Default to parent; will adjust below
+    df['Proposed Parent Account ID'] = None
+
+    # Logic to detect duplicates and parent-child relationships
+    for idx, row in df.iterrows():
+        domain = row['Domain']
+        country = row['Country']
+        
+        if pd.notna(domain):
+            same_domain_df = df[df['Domain'] == domain]
+            if len(same_domain_df) > 1:
+                # Sort by the number of opportunities for tie-breaking
+                same_domain_df = same_domain_df.sort_values(by=['Number of Open Opportunities', 'Number of Closed Opportunities'], ascending=False)
+                parent_account = same_domain_df.iloc[0]
+                
+                # Mark parent and children
+                for i, child_row in same_domain_df.iterrows():
+                    if child_row['Account Name'] != parent_account['Account Name']:
+                        df.at[i, 'Account Type'] = 'Child'
+                        df.at[i, 'Proposed Parent Account ID'] = parent_account['Parent Account ID']
+                    else:
+                        df.at[i, 'Account Type'] = 'Parent'
+
+        # Handling local country domain variations (like .com and .de)
+        if domain.endswith('.de') and country == 'Germany':
+            com_domain = domain.replace('.de', '.com')
+            if com_domain in df['Domain'].values:
+                com_account = df[df['Domain'] == com_domain].iloc[0]
+                df.at[idx, 'Account Type'] = 'Child'
+                df.at[idx, 'Proposed Parent Account ID'] = com_account['Parent Account ID']
+
+    return df
+
+# File uploader and initial DataFrame handling
+uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
 
 if uploaded_file is not None:
+    # Check if the file has headers or not
+    use_custom_headers = st.checkbox("Does the file have headers?", value=True)
+    
     try:
-        # Try reading the CSV file with 'utf-8' encoding first
-        df = pd.read_csv(uploaded_file, encoding='utf-8')
+        if use_custom_headers:
+            # Load CSV with headers
+            df = pd.read_csv(uploaded_file)
+        else:
+            # Load CSV without headers and assign manually
+            df = pd.read_csv(uploaded_file, header=None)
+            column_names = ['Account Name', 'Country', 'Domain', 'Website', 'Number of Closed Opportunities', 'Number of Open Opportunities', 'Existing Parent Flag', 'Parent Account ID']
+            df.columns = column_names
+        
+        st.write("### Data Preview (Before Processing):")
+        st.dataframe(df.head())
+        
+        # Sidebar options
+        apply_country_domain_rule = st.checkbox("Apply country and domain-based rules?")
+        
+        # Process the data and apply logic
+        if st.button("Process Data"):
+            processed_df = process_accounts(df)
+            st.write("### Data Preview (After Processing):")
+            st.dataframe(processed_df.head())
+            
+            # Download button for processed data
+            csv_data = processed_df.to_csv(index=False).encode('utf-8')
+            st.download_button(label="Download Processed CSV", data=csv_data, file_name='processed_accounts.csv', mime='text/csv')
+
     except UnicodeDecodeError:
-        # If there's a decoding error, try 'ISO-8859-1'
-        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
-
-    st.write("### Data Preview (Before Cleanup):")
-    st.dataframe(df.head())
-
-    # Sidebar options
-    st.sidebar.title("Options")
-
-    # Rule: If domain exists for both accounts in the same country, one is the parent
-    apply_country_domain_rule = st.sidebar.checkbox("Apply Country & Domain Rule")
-
-    # Rule: Handle accounts with same or similar names but one without domain as duplicate
-    apply_name_similarity_rule = st.sidebar.checkbox("Apply Name Similarity Rule")
-
-    # Rule: Use opportunity counts as tiebreaker for duplicates
-    apply_opportunity_rule = st.sidebar.checkbox("Use Opportunity Counts for Tiebreaker")
-
-    # Define Parent account country rule
-    prefer_us_parents = st.sidebar.checkbox("Prefer Parent Accounts in the United States")
-
-    # Button to process data
-    if st.sidebar.button("Process Data"):
-        st.write("### Processing Results...")
-
-        # Function to identify potential duplicates and relationships
-        def process_accounts(df):
-            df['Account Type'] = 'Parent'  # Default every account to parent
-            df['Proposed Parent Account Id'] = None  # Initialize as None
-
-            for index, row in df.iterrows():
-                # Apply country and domain rule
-                if apply_country_domain_rule and pd.notna(row['Domain']):
-                    same_country = df[(df['Country'] == row['Country']) & (df['Domain'] == row['Domain'])]
-                    if len(same_country) > 1:
-                        # Pick the first as parent and others as child
-                        df.loc[same_country.index[1:], 'Account Type'] = 'Child'
-                        df.loc[same_country.index[1:], 'Proposed Parent Account Id'] = same_country.iloc[0]['Account Id']
-
-                # Apply name similarity rule
-                if apply_name_similarity_rule:
-                    similar_names = difflib.get_close_matches(row['Name'], df['Name'].tolist(), n=5, cutoff=0.85)
-                    if len(similar_names) > 1:
-                        # Treat similar names without a domain as duplicates
-                        similar_accounts = df[df['Name'].isin(similar_names)]
-                        if pd.isna(row['Domain']):
-                            df.loc[index, 'Account Type'] = 'Duplicate'
-                            df.loc[index, 'Proposed Parent Account Id'] = similar_accounts.iloc[0]['Account Id']
-
-                # Apply opportunity count tiebreaker rule
-                if apply_opportunity_rule:
-                    same_opportunity_accounts = df[(df['Country'] == row['Country']) & (df['Name'] == row['Name'])]
-                    if len(same_opportunity_accounts) > 1:
-                        max_opportunities_account = same_opportunity_accounts.loc[
-                            same_opportunity_accounts['Number of Open Opportunities'].idxmax()
-                        ]
-                        df.loc[same_opportunity_accounts.index.difference([max_opportunities_account.name]), 'Account Type'] = 'Duplicate'
-                        df.loc[same_opportunity_accounts.index.difference([max_opportunities_account.name]), 'Proposed Parent Account Id'] = max_opportunities_account['Account Id']
-
-            return df
-
-        # Process the uploaded data
-        processed_df = process_accounts(df)
-
-        # Display processed data
-        st.write("### Processed Data Preview")
-        st.dataframe(processed_df.head())
-
-        # Allow user to download the processed file
-        csv = processed_df.to_csv(index=False)
-        st.download_button("Download Processed CSV", csv, "processed_accounts.csv", "text/csv")
+        st.error("There was an error reading the CSV file. Ensure it's properly formatted and try again.")
+else:
+    st.write("Please upload a file to proceed.")
