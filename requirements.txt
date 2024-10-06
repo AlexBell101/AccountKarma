@@ -1,6 +1,3 @@
 streamlit
 pandas
-chardet
-fuzzywuzzy
-python-Levenshtein
-numpy
+difflib
