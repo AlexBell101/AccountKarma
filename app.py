@@ -1,119 +1,81 @@
 import streamlit as st
 import pandas as pd
-import chardet  # To detect file encoding
-import numpy as np
-from fuzzywuzzy import fuzz
+import chardet
 
-# Set the page config
-st.set_page_config(page_title="Account Karma", layout="centered")
-
+# Set up Streamlit app
 st.title("Account Karma")
+st.write("Upload your account data and apply rules to detect duplicates and identify parent-child relationships.")
 
-# File uploader and initial DataFrame
-uploaded_file = st.file_uploader("Upload your account data", type=['csv', 'xls', 'xlsx'])
+# Upload the CSV file
+uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
 
-if uploaded_file is not None:
+# Helper function to detect encoding
+def detect_encoding(file):
+    raw_data = file.read(10000)
+    file.seek(0)
+    result = chardet.detect(raw_data)
+    return result['encoding']
+
+if uploaded_file:
+    # Detect the file encoding
+    encoding = detect_encoding(uploaded_file)
+    
     try:
-        # Detect file encoding
-        raw_data = uploaded_file.read()
-        result = chardet.detect(raw_data)
-        file_encoding = result['encoding']
-
-        # Reload the file with correct encoding using pandas
-        st.write(f"Detected file encoding: {file_encoding}")
-        uploaded_file.seek(0)  # Reset file pointer after reading it for encoding detection
+        df = pd.read_csv(uploaded_file, encoding=encoding)
+        st.success(f"File loaded successfully with encoding: {encoding}")
         
-        # Try reading the CSV with headers, if it fails, fallback to no headers
-        try:
-            df = pd.read_csv(uploaded_file, encoding=file_encoding)
-        except Exception as e:
-            st.write("Column headers not detected properly. Using the first row as headers.")
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding=file_encoding, header=None)  # Try without headers
-
-            # Prompt user to select the actual headers
-            st.write("Please manually select the correct header row")
-            header_row = st.number_input("Select the row number containing headers (0-indexed)", min_value=0, max_value=len(df)-1, value=0)
-            df.columns = df.iloc[header_row]
-            df = df.drop(header_row).reset_index(drop=True)
-
-        # Clean up column names
-        df.columns = df.columns.str.strip().str.replace('"', '')
-
-        # Preview the first few rows of the dataset
-        st.write("### Data Preview (Before Cleanup):")
+        # Display the first few rows of the dataframe
+        st.write("### Data Preview")
         st.dataframe(df.head())
-
-        # Detect and show column names
-        st.write("### Detected Columns:")
-        for i, col in enumerate(df.columns):
-            st.write(f"{i}: {col}")
-
-        # Let the user choose the important columns to work with
-        account_name_col = st.selectbox("Select the column for Account Name:", df.columns)
-        domain_col = st.selectbox("Select the column for Domain:", df.columns)
-        country_col = st.selectbox("Select the column for Country:", df.columns)
-        closed_opps_col = st.selectbox("Select the column for Closed Opportunities:", df.columns)
-        open_opps_col = st.selectbox("Select the column for Open Opportunities:", df.columns)
-
-        # Ensure that the columns selected exist in the dataset
-        if account_name_col and domain_col and country_col:
-            st.write("You selected the following columns:")
-            st.write(f"Account Name: {account_name_col}")
-            st.write(f"Domain: {domain_col}")
-            st.write(f"Country: {country_col}")
-
-            # Add columns for Account Type and Proposed Parent Account ID
-            df['Account Type'] = np.nan
-            df['Proposed Parent Account ID'] = np.nan
-
-            # Process the accounts based on the rules
+        
+        # Allow user to select important columns
+        account_name_col = st.selectbox("Select the column for Account Name", df.columns)
+        domain_col = st.selectbox("Select the column for Domain", df.columns)
+        country_col = st.selectbox("Select the column for Billing Country", df.columns)
+        
+        # Processing rules
+        def process_accounts(df):
+            df['Duplicate'] = False
+            df['Account Type'] = 'Parent'
+            df['Proposed Parent Account ID'] = None
+            
             for idx, row in df.iterrows():
+                account_name = row[account_name_col]
                 domain = row[domain_col]
                 country = row[country_col]
-                account_name = row[account_name_col]
-                closed_opps = row[closed_opps_col]
-                open_opps = row[open_opps_col]
-
-                # Rule 1: If domain exists for both and the country is the same, make the .com domain the parent if both exist
+                
+                # Rule 1: If the domain exists for both and the country is the same, one is parent
                 if pd.notna(domain):
-                    possible_parent_domains = [domain.replace('.' + domain.split('.')[-1], '.com')]
-                    for parent_domain in possible_parent_domains:
-                        if parent_domain in df[domain_col].values:
-                            com_account = df[df[domain_col] == parent_domain].iloc[0]
-                            df.at[idx, 'Account Type'] = 'Child'
-                            df.at[idx, 'Proposed Parent Account ID'] = com_account['Account ID']
-                            break
+                    com_domain = domain.replace('.de', '.com')
+                    if com_domain in df[domain_col].values and country == df[df[domain_col] == com_domain][country_col].values[0]:
+                        parent_row = df[df[domain_col] == com_domain].iloc[0]
+                        df.at[idx, 'Account Type'] = 'Child'
+                        df.at[idx, 'Proposed Parent Account ID'] = parent_row['Account ID']
+                
+                # Rule 2: Similar names and same country, one without domain is duplicate
+                similar_accounts = df[(df[account_name_col].str.contains(account_name, case=False)) & (df[country_col] == country)]
+                if len(similar_accounts) > 1 and pd.isna(row[domain_col]):
+                    df.at[idx, 'Duplicate'] = True
+            
+            return df
 
-                # Rule 2: If the account name is similar and one has no domain, mark the one without a domain as a duplicate
-                for other_idx, other_row in df.iterrows():
-                    if idx != other_idx:
-                        other_domain = other_row[domain_col]
-                        similarity = fuzz.partial_ratio(account_name, other_row[account_name_col])
-                        if similarity > 80:  # Threshold for account name similarity
-                            if pd.isna(domain) and pd.notna(other_domain):
-                                df.at[idx, 'Account Type'] = 'Duplicate'
-                                break
-
-                # Rule 3: In a tie, use the number of closed or open opportunities to determine the parent
-                if pd.isna(df.at[idx, 'Account Type']):
-                    if pd.notna(open_opps) and pd.notna(closed_opps):
-                        max_open_opps_idx = df[open_opps_col].idxmax()
-                        max_closed_opps_idx = df[closed_opps_col].idxmax()
-                        if idx == max_open_opps_idx or idx == max_closed_opps_idx:
-                            df.at[idx, 'Account Type'] = 'Parent'
-                        else:
-                            df.at[idx, 'Account Type'] = 'Child'
-
-            # Display the processed data
-            st.write("### Processed Data:")
-            st.dataframe(df[[account_name_col, domain_col, country_col, 'Account Type', 'Proposed Parent Account ID']].head())
-
-            # Download button for the processed file
-            processed_file = df.to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download Processed Data", data=processed_file, file_name="processed_accounts.csv", mime="text/csv")
-
+        processed_df = process_accounts(df)
+        
+        # Display processed data
+        st.write("### Processed Data")
+        st.dataframe(processed_df[[account_name_col, domain_col, country_col, 'Account Type', 'Proposed Parent Account ID', 'Duplicate']].head())
+        
+        # Download button for processed data
+        csv = processed_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Processed CSV",
+            data=csv,
+            file_name='processed_accounts.csv',
+            mime='text/csv',
+        )
+    
     except Exception as e:
         st.error(f"An error occurred while processing the file: {str(e)}")
+
 else:
     st.write("Please upload a CSV file to proceed.")
