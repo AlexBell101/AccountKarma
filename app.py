@@ -1,96 +1,102 @@
 import streamlit as st
 import pandas as pd
-import difflib
+import tldextract
+from io import BytesIO
 
-# Set page config for the Streamlit app
-st.set_page_config(page_title="Account Karma", layout="wide")
+# Set up the page
+st.set_page_config(page_title="Account Karma", layout="centered")
 
-# Custom CSS for a cleaner look
-st.markdown(
-    """
-    <style>
-    /* Custom style for light theme */
-    html, body, [class*="css"]  {
-        background-color: #FFFFFF;  /* White background */
-        color: #000000;  /* Black text */
-        font-family: 'Roboto', sans-serif;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
+# UI setup for the app
 st.title("🔍 Account Karma")
 st.write("Upload your account data, apply rules to detect duplicates, and identify parent-child account relationships. Leverage custom rules based on country, domain, opportunity counts, and more.")
 
-# Function to process the account data and add relationship columns
-def process_accounts(df):
-    if 'Domain' not in df.columns or 'Country' not in df.columns:
-        st.error("Required columns 'Domain' or 'Country' not found in the file.")
-        return df
-    
-    df['Account Type'] = "Parent"  # Default to parent; will adjust below
-    df['Proposed Parent Account ID'] = None
+# File uploader
+uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
 
-    for idx, row in df.iterrows():
-        domain = row['Domain']
-        country = row['Country']
-        
-        if pd.notna(domain):
-            same_domain_df = df[df['Domain'] == domain]
-            if len(same_domain_df) > 1:
-                same_domain_df = same_domain_df.sort_values(by=['Number of Open Opportunities', 'Number of Closed Opportunities'], ascending=False)
-                parent_account = same_domain_df.iloc[0]
-                
-                for i, child_row in same_domain_df.iterrows():
-                    if child_row['Account Name'] != parent_account['Account Name']:
-                        df.at[i, 'Account Type'] = 'Child'
-                        df.at[i, 'Proposed Parent Account ID'] = parent_account['Parent Account ID']
-                    else:
-                        df.at[i, 'Account Type'] = 'Parent'
-
-        if domain.endswith('.de') and country == 'Germany':
-            com_domain = domain.replace('.de', '.com')
-            if com_domain in df['Domain'].values:
-                com_account = df[df['Domain'] == com_domain].iloc[0]
-                df.at[idx, 'Account Type'] = 'Child'
-                df.at[idx, 'Proposed Parent Account ID'] = com_account['Parent Account ID']
-
-    return df
-
-# File uploader and initial DataFrame handling
-uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
-
+# Process the file
 if uploaded_file is not None:
-    # Check if the file has headers or not
-    use_custom_headers = st.checkbox("Does the file have headers?", value=True)
-    
     try:
-        if use_custom_headers:
-            df = pd.read_csv(uploaded_file, encoding='utf-8', error_bad_lines=False, warn_bad_lines=True)
-        else:
-            df = pd.read_csv(uploaded_file, header=None, encoding='utf-8', error_bad_lines=False, warn_bad_lines=True)
-            column_names = ['Account Name', 'Country', 'Domain', 'Website', 'Number of Closed Opportunities', 'Number of Open Opportunities', 'Existing Parent Flag', 'Parent Account ID']
-            df.columns = column_names
+        # Load the CSV file
+        df = pd.read_csv(uploaded_file)
 
-        st.write("### Data Preview (Before Processing):")
+        # Display data preview
+        st.write("### Data Preview (Before Cleanup):")
         st.dataframe(df.head())
-        
-        apply_country_domain_rule = st.checkbox("Apply country and domain-based rules?")
-        
-        if st.button("Process Data"):
-            processed_df = process_accounts(df)
-            st.write("### Data Preview (After Processing):")
-            st.dataframe(processed_df.head())
-            
-            csv_data = processed_df.to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download Processed CSV", data=csv_data, file_name='processed_accounts.csv', mime='text/csv')
 
-    except UnicodeDecodeError:
-        st.error("There was an error reading the CSV file due to encoding issues. Ensure the file is UTF-8 encoded and properly formatted.")
-    except pd.errors.ParserError as e:
-        st.error(f"Parsing error occurred: {str(e)}. Please check the file format and content.")
+        # Ensure necessary columns are in the dataset
+        required_columns = ['Domain', 'Country', 'Account Name', 'Number of Open Opportunities', 'Number of Closed Opportunities', 'Parent Account ID']
+        for col in required_columns:
+            if col not in df.columns:
+                st.error(f"Required column '{col}' is missing from the dataset.")
+                st.stop()
+
+        # Initialize necessary columns for processing
+        df['Account Type'] = "Parent"  # Default assumption for all accounts
+        df['Proposed Parent Account ID'] = None
+
+        # Define the account processing function
+        def process_accounts(df):
+            for idx, row in df.iterrows():
+                domain = row['Domain']
+                country = row['Country']
+
+                if pd.notna(domain):
+                    # Extract base domain and TLD
+                    extracted_domain = tldextract.extract(domain)
+                    base_domain = f"{extracted_domain.domain}.{extracted_domain.suffix}"
+
+                    # If the domain is not .com, check if the .com version exists
+                    if extracted_domain.suffix != "com":
+                        com_domain = f"{extracted_domain.domain}.com"
+
+                        if com_domain in df['Domain'].values:
+                            # The .com version is treated as the parent
+                            com_account = df[df['Domain'] == com_domain].iloc[0]
+                            df.at[idx, 'Account Type'] = 'Child'
+                            df.at[idx, 'Proposed Parent Account ID'] = com_account['Parent Account ID']
+
+                # Handle accounts with the same domain but different names
+                same_domain_df = df[df['Domain'] == domain]
+
+                # Sort based on open and closed opportunities for tie-breaking
+                if len(same_domain_df) > 1:
+                    same_domain_df = same_domain_df.sort_values(by=['Number of Open Opportunities', 'Number of Closed Opportunities'], ascending=False)
+                    parent_account = same_domain_df.iloc[0]
+
+                    for i, child_row in same_domain_df.iterrows():
+                        if child_row['Account Name'] != parent_account['Account Name']:
+                            df.at[i, 'Account Type'] = 'Child'
+                            df.at[i, 'Proposed Parent Account ID'] = parent_account['Parent Account ID']
+                        else:
+                            df.at[i, 'Account Type'] = 'Parent'
+
+            return df
+
+        # Process the accounts
+        processed_df = process_accounts(df)
+
+        # Display processed data
+        st.write("### Data Preview (After Processing):")
+        st.dataframe(processed_df.head())
+
+        # Provide download options
+        output_format = st.selectbox("Select output format", ['CSV', 'Excel', 'TXT'])
+
+        if output_format == 'CSV':
+            csv = processed_df.to_csv(index=False).encode('utf-8')
+            st.download_button(label="Download CSV", data=csv, file_name="processed_accounts.csv", mime='text/csv')
+        elif output_format == 'Excel':
+            output = BytesIO()
+            writer = pd.ExcelWriter(output, engine='xlsxwriter')
+            processed_df.to_excel(writer, index=False)
+            writer.save()
+            st.download_button(label="Download Excel", data=output.getvalue(), file_name="processed_accounts.xlsx", mime='application/vnd.ms-excel')
+        elif output_format == 'TXT':
+            txt = processed_df.to_csv(index=False, sep="\t").encode('utf-8')
+            st.download_button(label="Download TXT", data=txt, file_name="processed_accounts.txt", mime='text/plain')
+
     except Exception as e:
-        st.error(f"An unexpected error occurred: {str(e)}")
+        st.error(f"An error occurred while processing the file: {e}")
+
 else:
-    st.write("Please upload a file to proceed.")
+    st.info("Please upload a CSV file to proceed.")
